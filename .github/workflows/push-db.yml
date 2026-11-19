@@ -10,18 +10,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
       - uses: actions/checkout@v4
-      - uses: supabase/setup-cli@v3
-        with:
-          version: v2.stable
-      - run: supabase link --project-ref yhrftedopnpwwhzuulfd
-      - run: |
-          if ! supabase db push --linked --yes; then
-            FIRST_VER=$(ls supabase/migrations | head -n 1 | cut -d'_' -f1)
-            supabase migration repair --status applied "$FIRST_VER" --linked --yes || supabase migration repair --status applied "$FIRST_VER"
-            supabase db push --linked --yes
-          fi
+      - name: Install psql and test IPv4 connection
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then echo "ERROR: SUPABASE_DB_URL secret is empty!"; exit 1; fi
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          psql "$SUPABASE_DB_URL" -c "SELECT 1;"
+      - name: Run all migrations in order
+        run: |
+          for f in $(ls supabase/migrations/*.sql | sort -V); do
+            echo "=== Running $f ==="
+            psql "$SUPABASE_DB_URL" -f "$f"
+          done
+          echo "=== Verifying Tables ==="
+          psql "$SUPABASE_DB_URL" -c "\dt public.*"
+          psql "$SUPABASE_DB_URL" -c "SELECT count(*) AS districts_count FROM public.codenagari_districts;"
           
