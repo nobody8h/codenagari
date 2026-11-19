@@ -17,6 +17,11 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+      - name: Verify secrets exist
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then echo "ERROR: SUPABASE_ACCESS_TOKEN is empty!"; exit 1; fi
+          if [ -z "$SUPABASE_DB_PASSWORD" ]; then echo "ERROR: SUPABASE_DB_PASSWORD is empty!"; exit 1; fi
+          echo "Secrets loaded (token length: ${#SUPABASE_ACCESS_TOKEN})"
       - run: supabase link --project-ref yhrftedopnpwwhzuulfd
       - run: |
           if ! supabase db push --linked --yes; then
