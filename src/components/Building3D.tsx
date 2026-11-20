@@ -5,7 +5,11 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { CityBuilding } from "@/lib/github";
 import type { BuildingColors } from "./CityCanvas";
-import { ZONE_ITEMS } from "@/lib/zones";
+import {
+  ZONE_ITEMS,
+  CODENAGARI_VOXEL_SPECS,
+  type CodeNagariItemVisualSpec,
+} from "@/lib/zones";
 import {
   NeonOutline,
   ParticleAura,
@@ -36,9 +40,24 @@ import { MiniWhiteRabbit } from "./WhiteRabbit";
 
 // Shared constants
 const WHITE = new THREE.Color("#ffffff");
+const RUST_BRONZE_TINT = new THREE.Color("#6e5849");
+const RUST_ROOF_TINT = new THREE.Color("#4f433b");
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
-// Shared unit box geometry — scaled per building, prevents 300+ geometry allocations
+// Shared unit box & cylinder geometries — scaled per primitive, prevents per-frame allocations
 const SHARED_BOX_GEO = new THREE.BoxGeometry(1, 1, 1);
+const SHARED_CYLINDER_GEO = new THREE.CylinderGeometry(1, 1, 1, 8);
+
+// Extended optional fields on CityBuilding for CodeNagari profiles & 24h preview state
+type CodeNagariBuildingExt = CityBuilding & {
+  is_open_to_work?: boolean;
+  role_target?: string | null;
+  resume_or_portfolio_url?: string | null;
+  district_slug?: string | null;
+  gifted_by?: string | null;
+  created_at?: string | null;
+  first_seen_at?: string | null;
+};
 
 // ─── Window Atlas ────────────────────────────────────────────
 // ONE 2048x2048 texture with 6 lit-percentage bands of 42 rows each.
@@ -168,6 +187,213 @@ function createWindowTexture(
   return tex;
 }
 
+// ─── CodeNagari Helpers: Rust Weathering & Recruiter Beacon ─
+
+function isBuildingRusted(building: CodeNagariBuildingExt): boolean {
+  const items = building.owned_items ?? [];
+  if (building.claimed || items.includes("recruiter_hologram_beacon") || building.is_open_to_work) {
+    return false;
+  }
+
+  const timestampCandidate = building.created_at ?? building.first_seen_at;
+  if (timestampCandidate) {
+    const parsedMs = Date.parse(timestampCandidate);
+    if (!Number.isNaN(parsedMs)) {
+      return Date.now() - parsedMs > TWENTY_FOUR_HOURS_MS;
+    }
+  }
+
+  // Deterministic fallback for static/seed buildings without a timestamp:
+  // ~45% of unclaimed buildings display oxidized bronze-grey weathering after initial preview
+  const hash = building.login.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return hash % 11 < 5;
+}
+
+function hasActiveRecruiterBeacon(building: CodeNagariBuildingExt): boolean {
+  const items = building.owned_items ?? [];
+  return Boolean(building.is_open_to_work || items.includes("recruiter_hologram_beacon"));
+}
+
+function createOpenToSdeSignTexture(roleTarget?: string | null): THREE.CanvasTexture {
+  const W = 512;
+  const H = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Dark cyber glass pill
+  ctx.fillStyle = "rgba(7, 11, 20, 0.92)";
+  ctx.beginPath();
+  ctx.roundRect(14, 14, W - 28, H - 28, 16);
+  ctx.fill();
+
+  // Emerald neon border
+  ctx.strokeStyle = "#10B981";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.roundRect(14, 14, W - 28, H - 28, 16);
+  ctx.stroke();
+
+  // Top line: OPEN TO SDE
+  ctx.fillStyle = "#E2FF32";
+  ctx.font = 'bold 38px "Silkscreen", monospace';
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("OPEN TO SDE", W / 2, 48);
+
+  // Sub-line: HIRING ME or custom target role
+  const subLabel = roleTarget && roleTarget.trim().length > 0
+    ? roleTarget.trim().slice(0, 26).toUpperCase()
+    : "HIRING ME • RESUME READY";
+  ctx.fillStyle = "#34D399";
+  ctx.font = 'bold 22px "Silkscreen", monospace';
+  ctx.fillText(subLabel, W / 2, 88);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// ─── CodeNagari Rooftop Voxel Item & Floating Sign Renderer ───
+
+function CodeNagariVoxelGroup({
+  spec,
+  height,
+  width,
+  depth,
+  indexOffset,
+}: {
+  spec: CodeNagariItemVisualSpec;
+  height: number;
+  width: number;
+  depth: number;
+  indexOffset: number;
+}) {
+  const rootRef = useRef<THREE.Group>(null);
+  const scaleFactor = Math.max(2.4, Math.min(width, depth) * 0.28);
+
+  const baseY = useMemo(() => {
+    if (spec.zone === "crown") return height + 4.5 + indexOffset * 2.2;
+    if (spec.zone === "aura") return height + 2.5;
+    return height + 0.6;
+  }, [spec.zone, height, indexOffset]);
+
+  useFrame((state) => {
+    const grp = rootRef.current;
+    if (!grp) return;
+    const t = state.clock.elapsedTime + indexOffset * 1.1;
+
+    if (spec.animates === "bob_spin") {
+      grp.position.y = baseY + Math.sin(t * 2.4) * 1.1;
+      grp.rotation.y = t * 1.4;
+    } else if (spec.animates === "pulse_beacon") {
+      grp.position.y = baseY + Math.sin(t * 3.0) * 0.6;
+      grp.rotation.y = t * 0.9;
+    } else if (spec.animates === "tapri_steam") {
+      grp.position.y = baseY + Math.sin(t * 2.0) * 0.2;
+      grp.rotation.y = Math.sin(t * 0.6) * 0.15;
+    } else if (spec.animates === "squad_orbit") {
+      grp.position.y = baseY + Math.cos(t * 2.2) * 0.7;
+      grp.rotation.y = -t * 1.2;
+    }
+  });
+
+  return (
+    <group
+      ref={rootRef}
+      position={[0, baseY, 0]}
+      scale={[scaleFactor, scaleFactor, scaleFactor]}
+    >
+      {spec.primitives.map((prim, idx) => {
+        const isCyl = prim.kind === "cylinder";
+        const geo = isCyl ? SHARED_CYLINDER_GEO : SHARED_BOX_GEO;
+        const argsScale: [number, number, number] = isCyl
+          ? [prim.size[0], prim.size[2], prim.size[1]]
+          : prim.size;
+
+        return (
+          <mesh
+            key={`${spec.id}-${idx}`}
+            geometry={geo}
+            position={prim.position}
+            rotation={prim.rotation ?? [0, 0, 0]}
+            scale={argsScale}
+            dispose={null}
+          >
+            <meshStandardMaterial
+              color={prim.color}
+              emissive={prim.emissive ? new THREE.Color(prim.emissive) : new THREE.Color("#000000")}
+              emissiveIntensity={prim.emissiveIntensity ?? 0}
+              roughness={0.55}
+              metalness={0.15}
+            />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+function OpenToSdeFloatingSign({
+  height,
+  roleTarget,
+}: {
+  height: number;
+  roleTarget?: string | null;
+}) {
+  const spriteRef = useRef<THREE.Sprite>(null);
+
+  const signTexture = useMemo(
+    () => createOpenToSdeSignTexture(roleTarget),
+    [roleTarget]
+  );
+
+  useEffect(() => {
+    return () => {
+      signTexture.dispose();
+    };
+  }, [signTexture]);
+
+  const signMaterial = useMemo(
+    () =>
+      new THREE.SpriteMaterial({
+        map: signTexture,
+        transparent: true,
+        depthTest: true,
+        sizeAttenuation: true,
+      }),
+    [signTexture]
+  );
+
+  useEffect(() => {
+    return () => {
+      signMaterial.dispose();
+    };
+  }, [signMaterial]);
+
+  const baseSignY = height + 34;
+
+  useFrame((state) => {
+    if (!spriteRef.current) return;
+    const t = state.clock.elapsedTime;
+    spriteRef.current.position.y = baseSignY + Math.sin(t * 2.8) * 2.4;
+  });
+
+  return (
+    <sprite
+      ref={spriteRef}
+      material={signMaterial}
+      position={[0, baseSignY, 0]}
+      scale={[36, 9, 1]}
+    />
+  );
+}
+
 // ─── Claimed Glow (neon trim + roof light) ────────────────────
 
 export const ClaimedGlow = memo(function ClaimedGlow({
@@ -221,7 +447,7 @@ export const ClaimedGlow = memo(function ClaimedGlow({
 // ─── Multi-Level Labels ──────────────────────────────────────
 
 /** Level 1: Far — just @USERNAME (512x80, semi-transparent bg for readability) */
-function createFarLabel(building: CityBuilding): THREE.CanvasTexture {
+function createFarLabel(building: CodeNagariBuildingExt): THREE.CanvasTexture {
   const W = 512;
   const H = 80;
   const canvas = document.createElement("canvas");
@@ -251,7 +477,12 @@ function createFarLabel(building: CityBuilding): THREE.CanvasTexture {
   ctx.roundRect(bgX, bgY, bgW, bgH, 6);
   ctx.fill();
 
-  if (building.claimed) {
+  const isClaimedOrBeaconed =
+    building.claimed ||
+    hasActiveRecruiterBeacon(building) ||
+    (building.owned_items?.length ?? 0) > 0;
+
+  if (isClaimedOrBeaconed) {
     const tier = tierFromLevel(building.xp_level ?? 1);
     // Localhost tier (Lv 1-4) uses default cream; higher tiers get tier color
     if (tier.id === "localhost") {
@@ -389,7 +620,7 @@ export function showsFlag(building: CityBuilding): boolean {
 }
 
 export const BuildingItemEffects = memo(function BuildingItemEffects({ building, accentColor, focused, skipFlag }: {
-  building: CityBuilding;
+  building: CodeNagariBuildingExt;
   accentColor: string;
   focused?: boolean;
   /** The city draws flags instanced (InstancedEffects); previews draw them here. */
@@ -421,6 +652,24 @@ export const BuildingItemEffects = memo(function BuildingItemEffects({ building,
     if (auraItems.includes(itemId)) return auraItem === itemId;
     return true;
   };
+
+  // CodeNagari items render when owned (or when loadout explicitly selects them)
+  const equippedCodeNagariSpecs = useMemo(() => {
+    const specs: CodeNagariItemVisualSpec[] = [];
+    for (const itemId of items) {
+      if (
+        itemId === "pixel_cat_companion" ||
+        itemId === "chakra_neon_crown" ||
+        itemId === "recruiter_hologram_beacon" ||
+        itemId === "hostel_squad_4pack"
+      ) {
+        specs.push(CODENAGARI_VOXEL_SPECS[itemId]);
+      }
+    }
+    return specs;
+  }, [items]);
+
+  const showRecruiterSign = hasActiveRecruiterBeacon(building);
 
   return (
     <>
@@ -504,6 +753,26 @@ export const BuildingItemEffects = memo(function BuildingItemEffects({ building,
       {shouldRender("led_banner") && (
         <LEDBanner height={height} width={width} depth={depth} color={accentColor} />
       )}
+
+      {/* CodeNagari Low-Poly Voxel Items (Pixel Cat + Chai Tapri, Chakra Crown, Recruiter Beacon, Hostel Squad) */}
+      {equippedCodeNagariSpecs.map((spec, idx) => (
+        <CodeNagariVoxelGroup
+          key={spec.id}
+          spec={spec}
+          height={height}
+          width={width}
+          depth={depth}
+          indexOffset={idx}
+        />
+      ))}
+
+      {/* Floating Bobbing 3D Rooftop Sign for Open-to-SDE / Recruiter Beacon Builders */}
+      {showRecruiterSign && (
+        <OpenToSdeFloatingSign
+          height={height}
+          roleTarget={building.role_target}
+        />
+      )}
     </>
   );
 });
@@ -511,7 +780,7 @@ export const BuildingItemEffects = memo(function BuildingItemEffects({ building,
 // ─── Main Building Component ─────────────────────────────────
 
 interface Props {
-  building: CityBuilding;
+  building: CodeNagariBuildingExt;
   colors: BuildingColors;
   atlasTexture: THREE.CanvasTexture;
   introMode?: boolean;
@@ -526,6 +795,8 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
   const meshRef = useRef<THREE.Mesh>(null);
   const spriteRef = useRef<THREE.Sprite>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
+
+  const isRusted = useMemo(() => isBuildingRusted(building), [building]);
 
   const textures = useMemo(() => {
     const seed =
@@ -583,27 +854,37 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
   }, [textures]);
 
   const materials = useMemo(() => {
+    const roofColor = isRusted
+      ? new THREE.Color(colors.roof).lerp(RUST_ROOF_TINT, 0.55)
+      : new THREE.Color(colors.roof);
+
     const roof = new THREE.MeshStandardMaterial({
-      color: colors.roof,
-      emissive: new THREE.Color(colors.roof),
-      emissiveIntensity: 1.5,
-      roughness: 0.6,
+      color: roofColor,
+      emissive: isRusted ? RUST_ROOF_TINT : new THREE.Color(colors.roof),
+      emissiveIntensity: isRusted ? 0.35 : 1.5,
+      roughness: isRusted ? 0.95 : 0.6,
+      metalness: isRusted ? 0.25 : 0,
     });
-    const emIntensity = building.custom_color ? 1.5 : 2.0;
+
+    const emIntensity = isRusted ? 0.45 : (building.custom_color ? 1.5 : 2.0);
+    const faceTint = isRusted ? RUST_BRONZE_TINT : WHITE;
+
     const make = (tex: THREE.CanvasTexture) =>
       new THREE.MeshStandardMaterial({
         map: tex,
-        emissive: WHITE,
+        color: faceTint,
+        emissive: faceTint,
         emissiveMap: tex,
         emissiveIntensity: emIntensity,
-        roughness: 0.85,
-        metalness: 0,
+        roughness: isRusted ? 0.92 : 0.85,
+        metalness: isRusted ? 0.2 : 0,
       });
+
     // Reuse material instances for opposite faces (5 allocs -> 3)
     const side = make(textures.side);
     const front = make(textures.front);
     return [side, side, roof, roof, front, front];
-  }, [textures, colors.roof]);
+  }, [textures, colors.roof, isRusted, building.custom_color]);
 
   // Defer label creation until intro is done (saves 160KB+ canvas work per building)
   const labelTexture = useMemo(
@@ -639,10 +920,11 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
 
   // Dim/undim building when another is focused
   useEffect(() => {
+    const baseEmissive = isRusted ? 0.45 : 2.0;
     for (const mat of materials) {
       mat.transparent = dimmed || false;
       mat.opacity = dimmed ? 0.55 : 1;
-      mat.emissiveIntensity = dimmed ? 0.3 : (mat.map ? 2.0 : 1.5);
+      mat.emissiveIntensity = dimmed ? 0.25 : (mat.map ? baseEmissive : (isRusted ? 0.35 : 1.5));
     }
     if (labelMaterial) {
       labelMaterial.opacity = focused ? 0 : dimmed ? 0.15 : 1;
@@ -652,7 +934,12 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
     if (!dimmed && groupRef.current) {
       groupRef.current.visible = true;
     }
-  }, [focused, dimmed, materials, labelMaterial]);
+  }, [focused, dimmed, materials, labelMaterial, isRusted]);
+
+  const isClaimedOrBeaconed =
+    building.claimed ||
+    hasActiveRecruiterBeacon(building) ||
+    (building.owned_items?.length ?? 0) > 0;
 
   return (
     <group ref={groupRef} position={[building.position[0], 0, building.position[2]]}>
@@ -693,7 +980,7 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
       />
 
       {/* Skip heavy effects during intro - camera moves too fast to see them */}
-      {!introMode && building.claimed && (
+      {!introMode && isClaimedOrBeaconed && (
         <ClaimedGlow
           height={building.height}
           width={building.width}
