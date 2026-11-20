@@ -5,37 +5,48 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import EmailNotice from "@/components/EmailNotice";
 import CaptureMode from "@/components/CaptureMode";
 import PostHogIdentify from "@/components/PostHogIdentify";
+import { CodeNagariOverlay } from "@/components/CodeNagariOverlay";
 import "./globals.css";
 
+const BASE_URL =
+  process.env.NEXT_PUBLIC_BASE_URL ??
+  (process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "https://codenagari.in");
+
+const SITE_TITLE =
+  "CodeNagari — Your GitHub as a 3D Skyscraper in India's Campus & Tech Skyline";
+const SITE_DESCRIPTION =
+  "Explore Indian engineering campuses (IITs, NITs, BITS, VIT, SRM, DTU) and tech corridors (Bengaluru, Hyderabad, Pune, Gurugram, Chennai) in a live 3D developer metropolis. Compete in Weekly 1v1 Campus Skyline Wars, compare 1v1 stats, and upgrade your tower via 0%-fee UPI.";
+
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_BASE_URL ??
-      (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "http://localhost:3000")
-  ),
-  title: "Git City - Your GitHub as a 3D City",
-  description:
-    "Explore GitHub users as buildings in a 3D pixel art city. Fly through the city and discover developers.",
+  metadataBase: new URL(BASE_URL),
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
   keywords: [
+    "codenagari",
     "github",
     "3d city",
-    "developer profile",
-    "contributions",
+    "indian engineering campuses",
+    "campus skyline wars",
+    "bengaluru tech hub",
+    "open to sde",
     "pixel art",
     "open source",
     "git visualization",
   ],
   openGraph: {
-    title: "Git City - Your GitHub as a 3D City",
-    description:
-      "Explore GitHub users as buildings in a 3D pixel art city. Fly through the city and discover developers.",
-    siteName: "Git City",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    url: "https://codenagari.in",
+    siteName: "CodeNagari",
     type: "website",
-    locale: "en_US",
+    locale: "en_IN",
   },
   twitter: {
     card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
     creator: "@samuelrizzondev",
     site: "@samuelrizzondev",
   },
@@ -46,18 +57,11 @@ export const metadata: Metadata = {
   },
 };
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_BASE_URL ??
-  (process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000");
-
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "WebApplication",
-  name: "Git City",
-  description:
-    "Your GitHub profile as a 3D pixel art building in an interactive city",
+  name: "CodeNagari",
+  description: SITE_DESCRIPTION,
   url: BASE_URL,
   applicationCategory: "DeveloperApplication",
   operatingSystem: "Web",
@@ -68,8 +72,8 @@ const jsonLd = {
   },
   offers: {
     "@type": "Offer",
-    price: "0",
-    priceCurrency: "USD",
+    price: "29",
+    priceCurrency: "INR",
   },
 };
 
@@ -98,6 +102,7 @@ export default function RootLayout({
       </head>
       <body className="bg-bg font-pixel text-warm" suppressHydrationWarning>
         {children}
+        <CodeNagariOverlay />
         <EmailNotice />
         <CaptureMode />
         <PostHogIdentify />
